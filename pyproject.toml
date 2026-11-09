@@ -31,6 +31,8 @@ Homepage = "https://onlinecompiler.io"
 Documentation = "https://onlinecompiler.io/docs"
 Pricing = "https://onlinecompiler.io/pricing"
 Changelog = "https://onlinecompiler.io/changelog"
+Source = "https://github.com/onlinecompiler-io/onlinecompiler-python"
+Issues = "https://github.com/onlinecompiler-io/onlinecompiler-python/issues"
 
 [tool.hatch.version]
 path = "src/onlinecompiler/_client.py"

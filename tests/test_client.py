@@ -453,12 +453,12 @@ class JudgingTests(StubApiCase):
         created = {"session": "pss_Qm4Tn8Vx2Kb7Hc3Ld9Wz5Ey1", "problem": PROB, "version": 2, "token": TOKEN}
         self.reply(201, created)
         session = self.client.create_session("sum", "attempt-7", metadata={"c": 1}, callback_url="https://example.com/h",
-                                             expires_in=600, max_submits=2)
+                                             expires_in=600, max_submits=2, share_receipts=False)
         self.assertEqual(session["token"], TOKEN)
         self.assertEqual((self.sent["method"], self.sent["path"]), ("POST", "/api/problems/sum/sessions/"))
         self.assertEqual(self.sent["body"], {"external_ref": "attempt-7", "metadata": {"c": 1},
                                              "callback_url": "https://example.com/h", "expires_in": 600,
-                                             "max_submits": 2})
+                                             "max_submits": 2, "share_receipts": False})
         self.reply(201, created)
         self.client.create_session(PROB, "attempt-8")
         self.assertEqual(self.sent["body"], {"external_ref": "attempt-8"})

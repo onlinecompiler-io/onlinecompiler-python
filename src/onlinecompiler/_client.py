@@ -17,7 +17,7 @@ from urllib.parse import quote, urlencode
 from ._verify import _ed25519
 from ._verify import verify_receipt as _verify_receipt
 
-__version__ = "0.4.0"
+__version__ = "0.6.0"
 
 DEFAULT_BASE_URL = "https://api.onlinecompiler.io"
 # Long enough for a 30-second run or a 60-second run-tests request, plus queueing and network time.
@@ -285,6 +285,7 @@ class ProblemSession(TypedDict):
     metadata: dict[str, Any] | None
     callback_url: str
     max_submits: int
+    share_receipts: bool
     submits_used: int
     expires: str
     revoked: str | None
@@ -631,13 +632,15 @@ class OnlineCompiler:
 
     def create_session(self, problem: str, external_ref: str, *, metadata: dict[str, Any] | None = None,
                        callback_url: str | None = None, expires_in: int | None = None,
-                       max_submits: int | None = None) -> ProblemSessionCreated:
+                       max_submits: int | None = None, share_receipts: bool | None = None) -> ProblemSessionCreated:
         """Let one candidate's widget Submit to a problem's current version. Returns the session with its token,
         shown only this once: render it into the candidate's page as data-session and keep it out of logs.
         external_ref is your opaque reference for the candidate or attempt (the page sees it; never a name or
-        email). expires_in is seconds (60 to 86,400; default 3,600), max_submits 1 to 20 (default 1)."""
+        email). expires_in is seconds (60 to 86,400; default 3,600), max_submits 1 to 20 (default 1).
+        share_receipts (default True) makes each Submit's signed receipt public by link, so the widget can link
+        to it; a shared receipt shows external_ref and your account reference, never the code, tests or output."""
         body = _without_none(external_ref=external_ref, metadata=metadata, callback_url=callback_url,
-                             expires_in=expires_in, max_submits=max_submits)
+                             expires_in=expires_in, max_submits=max_submits, share_receipts=share_receipts)
         return self._request("POST", f"/api/problems/{_segment(problem, 'problem')}/sessions/", body, secret=True)
 
     def session(self, problem: str, session_id: str) -> ProblemSession:
