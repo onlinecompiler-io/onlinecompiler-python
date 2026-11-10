@@ -17,7 +17,7 @@ from urllib.parse import quote, urlencode
 from ._verify import _ed25519
 from ._verify import verify_receipt as _verify_receipt
 
-__version__ = "0.6.0"
+__version__ = "0.7.1"
 
 DEFAULT_BASE_URL = "https://api.onlinecompiler.io"
 # Long enough for a 30-second run or a 60-second run-tests request, plus queueing and network time.
@@ -33,7 +33,7 @@ IDEMPOTENCY_KEY = re.compile(r"[ -~]{1,100}")
 REFUSED_ORIGINAL = ("The original request with this idempotency_key was refused, so it was not judged. Send it "
                     "again.")
 
-Checker = Literal["trim", "exact", "tokens", "float", "rows"]
+Checker = Literal["trim", "exact", "tokens", "float", "rows", "table", "table_ordered"]
 Scoring = Literal["all_or_nothing", "percent", "weighted"]
 Mode = Literal["all", "samples", "tests"]
 
@@ -403,7 +403,8 @@ class OnlineCompiler:
         """Run a program and wait for its result: output, error, exit_code, time, memory and any
         files it wrote. compiler is an id such as "python-3.14" (see compilers()). args are command-line
         arguments for the program (up to 32 strings; not for sqlite-3, duckdb-1.5 or erlang-29). memory_limit
-        (whole MB, 16 to 512) ends a run whose peak memory is over it with exit_code 137."""
+        (whole MB, 16 to 2048; 512 when left out, and a value above that raises the run's memory on Pro and Business) ends a run
+        whose peak memory is over it with exit_code 137."""
         body = _without_none(compiler=compiler, code=code, input=input, time_limit=time_limit, files=files,
                              args=args, memory_limit=memory_limit)
         return self._request("POST", "/api/run-code-sync/", body)
@@ -442,7 +443,7 @@ class OnlineCompiler:
                   idempotency_key: str | None = None) -> RunTestsResult | SubmissionQueued:
         """Judge a program against test cases: an overall verdict, a score, a verdict per test, the submission id
         and a signed receipt. Each test counts as one run. time_limit is seconds per test (default 2).
-        memory_limit (whole MB, 16 to 512) applies to every test; a test may carry its own args.
+        memory_limit (whole MB, 16 to 2048) applies to every test; a test may carry its own args.
 
         async_=True answers at once with the submission id (async is a Python keyword); get the result with
         wait_for_submission(), submission(), or a signed webhook to callback_url (which needs async_=True).
