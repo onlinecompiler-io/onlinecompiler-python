@@ -594,6 +594,105 @@ class JudgingTests(StubApiCase):
         self.assertEqual(FakeApi.requests, [])
 
 
+SUITE_FILES = [
+    {"name": "calculator.py", "content": "def add(a, b):\n    return a + b\n"},
+    {"name": "tests/test_calculator.py",
+     "content": "from calculator import add\n\ndef test_add():\n    assert add(2, 3) == 5\n"},
+]
+SUITE_RESULT = {
+    "verdict": "failed", "gradable": True, "passed": 1, "failed": 1, "errors": 0, "skipped": 0, "total": 2,
+    "score": 50.0,
+    "tests": [
+        {"name": "test_add", "classname": "tests.test_calculator", "file": None, "status": "passed", "time": 0.001,
+         "message": None, "score": None, "max_score": None},
+        {"name": "test_add_negative", "classname": "tests.test_calculator", "file": None, "status": "failed",
+         "time": 0.002, "message": "AssertionError: assert -1 == -2", "score": None, "max_score": None},
+    ],
+    "run": {"exit_code": 1, "signal": None, "time": 1.42, "memory": 61234, "output": "1 failed, 1 passed", "error": "",
+            "truncated": False},
+    "compiler": "python-3.14-tests", "preset": "pytest", "pack": {"version": "1.0"}, "report_truncated": False,
+    "time_limit": 20, "memory_limit": 512, "summary": "1 of 2 tests passed.",
+}
+SUITE_RECEIPT = {
+    "receipt": "rcpt_s", "format": 1, "submission": SUB, "account": "acct_1", "external_ref": None,
+    "issued": "2026-11-11T09:00:00Z", "compiler": {"id": "python-3.14-tests", "version": "3.14-1.0-b1", "image": None},
+    "suite": {"preset": "pytest", "command_sha256": "a" * 64, "pack_version": "1.0"}, "files_sha256": "b" * 64,
+    "settings": {"time_limit": 20, "memory_limit": 512}, "verdict": "failed", "score": 50, "passed": 1, "total": 2,
+    "tests": [{"status": "passed"}, {"status": "failed"}], "key_id": "oc-2026-11", "signature": "c2ln",
+}
+
+
+class SuiteTests(StubApiCase):
+    """run_suite: a test pack's command over files, answered with a named result per test."""
+
+    def test_run_suite_posts_the_suite_and_files_to_run_tests_and_returns_the_named_results(self):
+        self.reply(200, {**SUITE_RESULT, "submission": SUB, "receipt": SUITE_RECEIPT})
+        result = self.client.run_suite("python-3.14-tests", SUITE_FILES, preset="pytest")
+        self.assertEqual((self.sent["method"], self.sent["path"]), ("POST", "/api/run-tests/"))
+        self.assertEqual(self.sent["headers"]["Authorization"], "key-123")
+        self.assertNotIn("Idempotency-Key", self.sent["headers"])
+        self.assertEqual(self.sent["body"], {"compiler": "python-3.14-tests", "suite": {"preset": "pytest"},
+                                             "files": SUITE_FILES})
+        self.assertEqual(result, {**SUITE_RESULT, "submission": SUB, "receipt": SUITE_RECEIPT})
+        self.assertEqual([(t["name"], t["status"]) for t in result["tests"]],
+                         [("test_add", "passed"), ("test_add_negative", "failed")])
+
+    def test_an_empty_suite_runs_the_default_preset_and_every_option_given_is_sent(self):
+        self.reply(200, {**SUITE_RESULT, "submission": SUB, "receipt": None})
+        self.client.run_suite("nodejs-24-tests", SUITE_FILES)
+        self.assertEqual(self.sent["body"], {"compiler": "nodejs-24-tests", "suite": {}, "files": SUITE_FILES})
+        self.reply(200, {**SUITE_RESULT, "preset": None, "submission": SUB, "receipt": None})
+        result = self.client.run_suite("python-3.14-tests", SUITE_FILES, command="python grade.py", time_limit=25,
+                                       memory_limit=1024, external_ref="attempt-3", metadata={"learner": 9},
+                                       idempotency_key="attempt-3")
+        self.assertIsNone(result["preset"])
+        self.assertEqual(self.sent["headers"]["Idempotency-Key"], "attempt-3")
+        self.assertEqual(self.sent["body"], {"compiler": "python-3.14-tests", "suite": {"command": "python grade.py"},
+                                             "files": SUITE_FILES, "time_limit": 25, "memory_limit": 1024,
+                                             "external_ref": "attempt-3", "metadata": {"learner": 9}})
+
+    def test_what_the_api_would_refuse_is_refused_before_any_request(self):
+        with self.assertRaises(ValueError) as caught:
+            self.client.run_suite("python-3.14-tests", SUITE_FILES, preset="pytest", command="pytest")
+        self.assertIn("preset or command, not both", str(caught.exception))
+        with self.assertRaises(ValueError):
+            self.client.run_suite("python-3.14-tests", SUITE_FILES, idempotency_key="")
+        self.assertEqual(FakeApi.requests, [])
+
+    def test_a_refused_suite_and_a_busy_runner_keep_the_api_message_and_status(self):
+        self.reply(400, {"error": "tests cannot be sent with suite: a suite's test command decides its tests"})
+        with self.assertRaises(oc.OnlineCompilerError) as caught:
+            self.client.run_suite("python-3.14-tests", SUITE_FILES)
+        self.assertNotIsInstance(caught.exception, oc.RateLimitError)
+        self.assertEqual(caught.exception.status, 400)
+        self.assertIn("cannot be sent with suite", caught.exception.message)
+        self.reply(429, {"error": "Too many runs in progress. Please try again shortly."})
+        with self.assertRaises(oc.RateLimitError) as caught:
+            self.client.run_suite("python-3.14-tests", SUITE_FILES)
+        self.assertEqual(caught.exception.status, 429)
+        self.assertIn("try again shortly", caught.exception.message)
+
+    def test_a_replayed_suite_request_still_running_is_waited_for(self):
+        self.reply(202, {"submission": SUB, "status": "running"})
+        self.reply(200, finished(result=SUITE_RESULT, receipt=SUITE_RECEIPT))
+        with mock.patch("onlinecompiler._client.time.sleep"):
+            result = self.client.run_suite("python-3.14-tests", SUITE_FILES, idempotency_key="k1")
+        self.assertEqual(result, {**SUITE_RESULT, "submission": SUB, "receipt": SUITE_RECEIPT})
+        self.assertEqual([r["path"] for r in FakeApi.requests[1:]], [f"/api/submissions/{SUB}/"])
+
+    def test_compilers_passes_a_test_packs_pack_through(self):
+        pack = {"version": "1.0", "presets": ["jest", "mocha", "node-test"], "default": "jest"}
+        self.reply(200, {"compilers": [{"id": "nodejs-24-tests", "name": "Node.js 24 (tests)", "pack": pack}],
+                         "retired": {}})
+        self.assertEqual(self.client.compilers()[0]["pack"], pack)
+
+    def test_the_suite_types_are_exported(self):
+        for name in ("RunSuiteResult", "SuiteResult", "SuiteTestResult", "SuiteReceipt", "SuiteRun", "SuiteVerdict",
+                     "SuiteTestStatus", "CompilerPack"):
+            self.assertIn(name, oc.__all__)
+            self.assertTrue(hasattr(oc, name))
+
+
 @unittest.skipUnless(os.environ.get("ONLINECOMPILER_API_KEY"), "set ONLINECOMPILER_API_KEY to run against the API")
 class LiveTests(unittest.TestCase):
     """Two real runs against api.onlinecompiler.io; each counts toward the key's allowance."""

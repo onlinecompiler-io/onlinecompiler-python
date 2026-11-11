@@ -17,7 +17,7 @@ from urllib.parse import quote, urlencode
 from ._verify import _ed25519
 from ._verify import verify_receipt as _verify_receipt
 
-__version__ = "0.7.1"
+__version__ = "0.8.0"
 
 DEFAULT_BASE_URL = "https://api.onlinecompiler.io"
 # Long enough for a 30-second run or a 60-second run-tests request, plus queueing and network time.
@@ -180,6 +180,103 @@ class SubmissionResult(_Judged, _JudgedExtras, total=False):
     version: int
 
 
+SuiteVerdict = Literal["accepted", "failed", "compilation_error", "time_limit_exceeded", "memory_limit_exceeded",
+                       "output_limit_exceeded", "runtime_error", "no_report", "internal_error"]
+SuiteTestStatus = Literal["passed", "failed", "error", "skipped"]
+
+
+class SuiteTestResult(TypedDict):
+    """One test as the suite's report gave it, in report order. classname is its class, module or describe block,
+    and file the file the report names (passed through as given); name, classname and file are at most 500
+    characters. time is seconds. message is the failure, error or skip message, or a results.json test's output,
+    at most 4,096 characters. score and max_score are a results.json test's, else None."""
+
+    name: str
+    classname: str | None
+    file: str | None
+    status: SuiteTestStatus
+    time: float | None
+    message: str | None
+    score: float | None
+    max_score: float | None
+
+
+class SuiteRun(TypedDict):
+    """The suite's run itself: the test command's exit, and its stdout and stderr cut to 4,096 characters
+    (truncated is True when either was cut). Unlike run()'s result, time (seconds) and memory (peak KB) are
+    numbers."""
+
+    exit_code: int
+    signal: int | None
+    time: float
+    memory: int
+    output: str
+    error: str
+    truncated: bool
+
+
+class SuiteResult(TypedDict):
+    """A finished suite's result, as GET /api/submissions/{id}/ gives it.
+
+    verdict is the run's own problem first (compilation_error, time_limit_exceeded, memory_limit_exceeded,
+    output_limit_exceeded, runtime_error for too many processes, internal_error on our side); then no_report when
+    the command left no readable report; else accepted when the report names at least one test and every test
+    passed, failed otherwise. gradable is False for no_report and internal_error. score is 0 to 100: the
+    percentage of tests passed, or for a results.json whose every test has score and max_score, their scores over
+    their maximums. tests is empty when the run stopped or left no report; at most 1,000 are read
+    (report_truncated says when there were more). preset is None for a custom command; pack is {"version": ...};
+    time_limit is the seconds the whole suite could run and memory_limit the MB it had. summary is the result in
+    plain words from the counts, never a test's name or message."""
+
+    verdict: SuiteVerdict
+    gradable: bool
+    passed: int
+    failed: int
+    errors: int
+    skipped: int
+    total: int
+    score: float
+    tests: list[SuiteTestResult]
+    run: SuiteRun
+    compiler: str
+    preset: str | None
+    pack: dict[str, str]
+    report_truncated: bool
+    time_limit: float
+    memory_limit: int
+    summary: str
+
+
+class SuiteReceipt(TypedDict):
+    """A suite's signed receipt: the suite by its preset, its command's hash and the pack's version (suite), the
+    files by hash, and each test's status only, never a test's name or message. Check it with verify_receipt."""
+
+    receipt: str
+    format: int
+    submission: str
+    account: str
+    external_ref: str | None
+    issued: str
+    compiler: dict[str, Any]
+    suite: dict[str, Any]
+    files_sha256: str | None
+    settings: dict[str, Any]
+    verdict: SuiteVerdict
+    score: float
+    passed: int
+    total: int
+    tests: list[dict[str, Any]]
+    key_id: str
+    signature: str
+
+
+class RunSuiteResult(SuiteResult):
+    """A suite's answer: the suite result, its submission id, and the receipt (None when none could be signed)."""
+
+    submission: str
+    receipt: SuiteReceipt | None
+
+
 class SubmissionQueued(TypedDict):
     """An async submission's answer: its id and status ("queued", or the original's status for a replayed
     Idempotency-Key)."""
@@ -305,10 +402,21 @@ class Queued(TypedDict):
     id: int
 
 
+class CompilerPack(TypedDict):
+    """A test pack's suite: its version, its presets, and the preset an empty suite runs (default)."""
+
+    version: str
+    presets: list[str]
+    default: str
+
+
 class Compiler(TypedDict, total=False):
+    """pack is there only on a test pack, which run_suite() runs on."""
+
     id: str
     name: str
     packages: list[dict[str, str]]
+    pack: CompilerPack
 
 
 class OnlineCompilerError(Exception):
@@ -457,6 +565,30 @@ class OnlineCompiler:
         body.update(_judging_options(async_, callback_url, external_ref, metadata))
         answer = self._request("POST", "/api/run-tests/", body, headers=headers)
         return answer if async_ else self._settled(answer)
+
+    def run_suite(self, compiler: str, files: list[InputFile], *, preset: str | None = None,
+                  command: str | None = None, time_limit: float | None = None, memory_limit: int | None = None,
+                  external_ref: str | None = None, metadata: dict[str, Any] | None = None,
+                  idempotency_key: str | None = None) -> RunSuiteResult:
+        """Run a test pack's test command over files in one sandbox: a named result per test from the report it
+        writes, a score, the run's own output, the submission id and a signed receipt. The whole suite counts as
+        one run, and runs synchronously only.
+
+        compiler is a test pack: python-3.14-tests or nodejs-24-tests (a compiler with pack in compilers()). files
+        carry every source: the code under test, the tests and any fixtures (up to 20 files, 1 MB in all). preset
+        is one of the pack's presets (pytest; jest, mocha or node-test). command is a custom command run with bash
+        in /sandbox, at most 4,000 bytes, which must write $OUTPUT_DIR/report.xml (JUnit XML) or
+        $OUTPUT_DIR/results.json. Give one of them or neither: neither runs the pack's default preset. time_limit
+        is seconds for the whole suite (default 20, at most 30); memory_limit is whole MB, 16 to 2048.
+        external_ref, metadata and idempotency_key work as in run_tests(). A RateLimitError (429) when no sandbox
+        came free in time counts nothing, so send it again."""
+        if preset is not None and command is not None:
+            raise ValueError("give preset or command, not both")
+        headers = self._idempotency(idempotency_key)
+        body = _without_none(compiler=compiler, suite=_without_none(preset=preset, command=command), files=files,
+                             time_limit=time_limit, memory_limit=memory_limit, external_ref=external_ref,
+                             metadata=metadata)
+        return self._settled(self._request("POST", "/api/run-tests/", body, headers=headers))
 
     def submit(self, compiler: str, code: str, input: str = "", *, time_limit: float | None = None,
                files: list[InputFile] | None = None, extra_params: dict[str, Any] | None = None,
@@ -680,7 +812,7 @@ class OnlineCompiler:
     # Account
 
     def compilers(self) -> list[Compiler]:
-        """Every compiler id and its language name. Needs no API key."""
+        """Every compiler id and its language name, with pack on a test pack. Needs no API key."""
         return self._request("GET", "/api/compilers/", auth=False)["compilers"]
 
     def usage(self) -> dict[str, Any]:

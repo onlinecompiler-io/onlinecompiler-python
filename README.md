@@ -89,6 +89,44 @@ lookups and webhooks. `idempotency_key` (1 to 100 printable ASCII characters, ch
 sent as the `Idempotency-Key` header, so a retry after a timeout answers with the original result instead
 of running again. `client.submission(id)` looks a submission up once.
 
+## Test suites
+
+A suite runs a real test framework over your files in one sandbox and answers with a result per test, by
+name. It runs on a test pack, `python-3.14-tests` (pytest) or `nodejs-24-tests` (jest, mocha or
+`node-test`), and the whole suite counts as one run.
+
+```python
+result = client.run_suite(
+    "python-3.14-tests",
+    files=[
+        {"name": "calculator.py", "content": "def add(a, b):\n    return a + b\n"},
+        {"name": "tests/test_calculator.py", "content": (
+            "from calculator import add\n\n"
+            "def test_add():\n    assert add(2, 3) == 5\n\n"
+            "def test_negative():\n    assert add(-1, -1) == -2\n"
+        )},
+    ],
+    preset="pytest",
+)
+print(result["verdict"], result["score"], f"{result['passed']}/{result['total']}")  # accepted 100.0 2/2
+for test in result["tests"]:
+    print(test["status"], test["classname"], test["name"], test["message"] or "")
+```
+
+`files` carry every source: the code under test, the tests and any fixtures. Pass `preset` or `command`,
+never both; pass neither for the pack's default preset. A custom `command` runs with bash and must write
+`$OUTPUT_DIR/report.xml` (JUnit XML) or `$OUTPUT_DIR/results.json`. `time_limit` covers the whole suite
+(default 20 seconds, at most 30). `client.compilers()` lists each pack's presets in its `pack` field.
+
+Each entry of `tests` has `name`, `classname`, `file`, `status` (`passed`, `failed`, `error` or
+`skipped`), `time` and `message` (the failure or error text, or `None`). The counts are in `passed`,
+`failed`, `errors`, `skipped` and `total`. `verdict` is `accepted` when every test passed and `failed`
+when one did not; a run that stopped (`time_limit_exceeded`, `memory_limit_exceeded` and the like) lists
+no tests, and `no_report` means the command wrote no report (`gradable` is then `False`). `result["run"]`
+holds the command's own `exit_code`, `output` and `error`, which help when there is no report. A suite is
+synchronous only, while `external_ref`, `metadata` and `idempotency_key` work as in `run_tests()`. A
+`RateLimitError` saying the runs are busy counted nothing, so send the suite again.
+
 ## List submissions
 
 ```python
@@ -282,7 +320,7 @@ API key in the dashboard, with your `extra_params` echoed back.
 
 ## Other calls
 
-- `client.compilers()`: every compiler id and language name (no key needed).
+- `client.compilers()`: every compiler id and language name, with `pack` on a test pack (no key needed).
 - `client.usage()`: this month's runs and what's left, for the account and for the key.
 - `client.limits()`: per-run limits and default account limits (no key needed).
 
