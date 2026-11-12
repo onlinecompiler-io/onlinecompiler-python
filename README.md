@@ -92,8 +92,8 @@ of running again. `client.submission(id)` looks a submission up once.
 ## Test suites
 
 A suite runs a real test framework over your files in one sandbox and answers with a result per test, by
-name. It runs on a test pack, `python-3.14-tests` (pytest) or `nodejs-24-tests` (jest, mocha or
-`node-test`), and the whole suite counts as one run.
+name. It runs on a test pack: `python-3.14-tests` (pytest), `nodejs-24-tests` (jest, mocha or `node-test`),
+`openjdk-25-tests` (junit) or `dotnet-csharp-10-tests` (xunit or nunit). The whole suite counts as one run.
 
 ```python
 result = client.run_suite(
@@ -126,6 +126,17 @@ no tests, and `no_report` means the command wrote no report (`gradable` is then 
 holds the command's own `exit_code`, `output` and `error`, which help when there is no report. A suite is
 synchronous only, while `external_ref`, `metadata` and `idempotency_key` work as in `run_tests()`. A
 `RateLimitError` saying the runs are busy counted nothing, so send the suite again.
+
+On Pro and above, `services=["postgresql"]` starts a fresh PostgreSQL in the sandbox before the tests (on
+`python-3.14-tests` and `nodejs-24-tests`, from 0.9.0). The `.sql` files under `db/` run first, in name
+order, and `DATABASE_URL` is set, so psycopg, SQLAlchemy and Flask-SQLAlchemy connect with no settings.
+Send `memory_limit=1024` or more with it, since the server's memory counts in the run's;
+`client.compilers()` lists each pack's `services`:
+
+```python
+result = client.run_suite("python-3.14-tests", files, preset="pytest", services=["postgresql"],
+                          memory_limit=1024)
+```
 
 ## List submissions
 

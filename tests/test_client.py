@@ -651,6 +651,22 @@ class SuiteTests(StubApiCase):
                                              "files": SUITE_FILES, "time_limit": 25, "memory_limit": 1024,
                                              "external_ref": "attempt-3", "metadata": {"learner": 9}})
 
+    def test_services_go_in_the_suite_and_the_receipt_signs_them(self):
+        receipt = {**SUITE_RECEIPT, "suite": {**SUITE_RECEIPT["suite"], "services": ["postgresql"]}}
+        self.reply(200, {**SUITE_RESULT, "submission": SUB, "receipt": receipt})
+        result = self.client.run_suite("python-3.14-tests", SUITE_FILES, preset="pytest", services=["postgresql"],
+                                       memory_limit=1024)
+        self.assertEqual(self.sent["body"]["suite"], {"preset": "pytest", "services": ["postgresql"]})
+        self.assertEqual(self.sent["body"]["memory_limit"], 1024)
+        self.assertEqual(result["receipt"]["suite"]["services"], ["postgresql"])
+        self.reply(400, {"error": "PostgreSQL in a suite needs 32 processes at once: Pro and above "
+                                  "(https://onlinecompiler.io/pricing)"})
+        with self.assertRaises(oc.OnlineCompilerError) as caught:
+            self.client.run_suite("nodejs-24-tests", SUITE_FILES, services=["postgresql"])
+        self.assertEqual(caught.exception.status, 400)
+        self.assertIn("Pro and above", caught.exception.message)
+        self.assertEqual(self.sent["body"]["suite"], {"services": ["postgresql"]})
+
     def test_what_the_api_would_refuse_is_refused_before_any_request(self):
         with self.assertRaises(ValueError) as caught:
             self.client.run_suite("python-3.14-tests", SUITE_FILES, preset="pytest", command="pytest")
@@ -681,7 +697,8 @@ class SuiteTests(StubApiCase):
         self.assertEqual([r["path"] for r in FakeApi.requests[1:]], [f"/api/submissions/{SUB}/"])
 
     def test_compilers_passes_a_test_packs_pack_through(self):
-        pack = {"version": "1.0", "presets": ["jest", "mocha", "node-test"], "default": "jest"}
+        pack = {"version": "1.1", "presets": ["jest", "mocha", "node-test"], "default": "jest",
+                "services": ["postgresql"]}
         self.reply(200, {"compilers": [{"id": "nodejs-24-tests", "name": "Node.js 24 (tests)", "pack": pack}],
                          "retired": {}})
         self.assertEqual(self.client.compilers()[0]["pack"], pack)

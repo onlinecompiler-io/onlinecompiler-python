@@ -17,7 +17,7 @@ from urllib.parse import quote, urlencode
 from ._verify import _ed25519
 from ._verify import verify_receipt as _verify_receipt
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 DEFAULT_BASE_URL = "https://api.onlinecompiler.io"
 # Long enough for a 30-second run or a 60-second run-tests request, plus queueing and network time.
@@ -248,8 +248,8 @@ class SuiteResult(TypedDict):
 
 
 class SuiteReceipt(TypedDict):
-    """A suite's signed receipt: the suite by its preset, its command's hash and the pack's version (suite), the
-    files by hash, and each test's status only, never a test's name or message. Check it with verify_receipt."""
+    """A suite's signed receipt: the suite by its preset, its command's hash, the pack's version and, when it started
+    any, its services (suite), the files by hash, and each test's status only, never a test's name or message. Check it with verify_receipt."""
 
     receipt: str
     format: int
@@ -403,11 +403,13 @@ class Queued(TypedDict):
 
 
 class CompilerPack(TypedDict):
-    """A test pack's suite: its version, its presets, and the preset an empty suite runs (default)."""
+    """A test pack's suite: its version, its presets, the preset an empty suite runs (default), and the services
+    run_suite(services=...) can start on it (sorted; empty when it has none)."""
 
     version: str
     presets: list[str]
     default: str
+    services: list[str]
 
 
 class Compiler(TypedDict, total=False):
@@ -567,25 +569,30 @@ class OnlineCompiler:
         return answer if async_ else self._settled(answer)
 
     def run_suite(self, compiler: str, files: list[InputFile], *, preset: str | None = None,
-                  command: str | None = None, time_limit: float | None = None, memory_limit: int | None = None,
+                  command: str | None = None, services: list[str] | None = None,
+                  time_limit: float | None = None, memory_limit: int | None = None,
                   external_ref: str | None = None, metadata: dict[str, Any] | None = None,
                   idempotency_key: str | None = None) -> RunSuiteResult:
         """Run a test pack's test command over files in one sandbox: a named result per test from the report it
         writes, a score, the run's own output, the submission id and a signed receipt. The whole suite counts as
         one run, and runs synchronously only.
 
-        compiler is a test pack: python-3.14-tests or nodejs-24-tests (a compiler with pack in compilers()). files
-        carry every source: the code under test, the tests and any fixtures (up to 20 files, 1 MB in all). preset
-        is one of the pack's presets (pytest; jest, mocha or node-test). command is a custom command run with bash
-        in /sandbox, at most 4,000 bytes, which must write $OUTPUT_DIR/report.xml (JUnit XML) or
-        $OUTPUT_DIR/results.json. Give one of them or neither: neither runs the pack's default preset. time_limit
+        compiler is a test pack: python-3.14-tests, nodejs-24-tests, openjdk-25-tests or dotnet-csharp-10-tests (a
+        compiler with pack in compilers()). files carry every source: the code under test, the tests and any fixtures
+        (up to 20 files, 1 MB in all). preset is one of the pack's presets (pytest; jest, mocha or node-test; junit;
+        xunit or nunit). command is a custom command run with bash in /sandbox, at most 4,000 bytes, which must write
+        $OUTPUT_DIR/report.xml (JUnit XML) or $OUTPUT_DIR/results.json. Give one of them or neither: neither runs the
+        pack's default preset. services=["postgresql"] starts a fresh PostgreSQL in the sandbox before the tests (the
+        Python and Node packs, on Pro and above), seeded from the .sql files under db/, with DATABASE_URL set; send
+        memory_limit=1024 or more with it, since the server's memory counts in the run's. time_limit
         is seconds for the whole suite (default 20, at most 30); memory_limit is whole MB, 16 to 2048.
         external_ref, metadata and idempotency_key work as in run_tests(). A RateLimitError (429) when no sandbox
         came free in time counts nothing, so send it again."""
         if preset is not None and command is not None:
             raise ValueError("give preset or command, not both")
         headers = self._idempotency(idempotency_key)
-        body = _without_none(compiler=compiler, suite=_without_none(preset=preset, command=command), files=files,
+        suite = _without_none(preset=preset, command=command, services=services)
+        body = _without_none(compiler=compiler, suite=suite, files=files,
                              time_limit=time_limit, memory_limit=memory_limit, external_ref=external_ref,
                              metadata=metadata)
         return self._settled(self._request("POST", "/api/run-tests/", body, headers=headers))
