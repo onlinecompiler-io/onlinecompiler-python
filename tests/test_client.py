@@ -169,6 +169,52 @@ class ClientTests(StubApiCase):
             client.run("python-3.14", "x")
         self.assertEqual(caught.exception.status, 0)
 
+    def test_a_redirect_is_not_followed_so_the_key_never_reaches_another_host(self):
+        # urllib would copy Authorization onto the redirect target, a plain-http one included. The client
+        # refuses redirects: the target is never contacted and the 3xx surfaces as an error.
+        import http.server
+
+        hits = []
+
+        class Target(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                hits.append(self.headers.get("Authorization"))
+                self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def do_POST(self):
+                self.do_GET()
+
+            def log_message(self, *args):
+                pass
+
+        target = HTTPServer(("127.0.0.1", 0), Target)
+        threading.Thread(target=target.serve_forever, daemon=True).start()
+        self.addCleanup(target.server_close)
+        self.addCleanup(target.shutdown)
+
+        class Redirect(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{target.server_port}/stolen")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        redirector = HTTPServer(("127.0.0.1", 0), Redirect)
+        threading.Thread(target=redirector.serve_forever, daemon=True).start()
+        self.addCleanup(redirector.server_close)
+        self.addCleanup(redirector.shutdown)
+
+        client = oc.OnlineCompiler("key-123", base_url=f"http://127.0.0.1:{redirector.server_port}/", timeout=5)
+        with self.assertRaises(oc.OnlineCompilerError):
+            client.usage()
+        self.assertEqual(hits, [])
+
     def test_an_unknown_key_is_an_authentication_error_and_a_missing_id_is_not(self):
         self.reply(404, {"error": "Invalid or inactive API key"})
         with self.assertRaises(oc.AuthenticationError):

@@ -17,7 +17,18 @@ from urllib.parse import quote, urlencode
 from ._verify import _ed25519
 from ._verify import verify_receipt as _verify_receipt
 
-__version__ = "0.9.0"
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuses HTTP redirects. urllib would otherwise copy the Authorization header to the redirect
+    target, a plain-http one included, so a redirect away from the API would leak the key."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+__version__ = "0.9.1"
 
 DEFAULT_BASE_URL = "https://api.onlinecompiler.io"
 # Long enough for a 30-second run or a 60-second run-tests request, plus queueing and network time.
@@ -877,7 +888,7 @@ class OnlineCompiler:
         request = urllib.request.Request(self.base_url + path, data=data, headers=sent, method=method)
         failed = ""
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with _OPENER.open(request, timeout=self.timeout) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:  # before URLError, which it subclasses
             with exc:  # closes the error response
