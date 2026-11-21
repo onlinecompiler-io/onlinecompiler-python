@@ -28,12 +28,12 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 _OPENER = urllib.request.build_opener(_NoRedirect)
 
-__version__ = "0.9.1"
+__version__ = "0.9.2"
 
 DEFAULT_BASE_URL = "https://api.onlinecompiler.io"
 # Long enough for a 30-second run or a 60-second run-tests request, plus queueing and network time.
 DEFAULT_TIMEOUT = 90.0
-SIGNUP_URL = "https://api.onlinecompiler.io/compilers/api-keys/"
+SIGNUP_URL = "https://api.onlinecompiler.io/compilers/api-keys/?utm_source=python-sdk"
 RECEIPT_KEYS_PATH = "/.well-known/receipt-keys.json"
 KEYS_MAX_AGE = 3600.0  # seconds the receipt key list is kept, as the API allows it to be cached
 KEYS_REFETCH_AFTER = 60.0  # seconds before an unknown key_id fetches the list again
@@ -506,8 +506,8 @@ class OnlineCompiler:
     """A client for the OnlineCompiler.io code execution API.
 
     api_key defaults to the ONLINECOMPILER_API_KEY environment variable. Get a free key at
-    https://api.onlinecompiler.io/compilers/api-keys/. Requests are never retried, since every
-    accepted run counts toward your allowance.
+    https://api.onlinecompiler.io/compilers/api-keys/?utm_source=python-sdk. Requests are never
+    retried, since every accepted run counts toward your allowance.
     """
 
     def __init__(self, api_key: str | None = None, *, base_url: str = DEFAULT_BASE_URL,
